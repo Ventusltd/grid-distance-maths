@@ -40,19 +40,35 @@ decision on which radius to standardise.
 ## What is here
 
 ```
-src/geodesy.mjs      canonical implementation, browser and Node
-docs/EARTH-MODEL.md  the audit, the error budget, and the decision
-test/verify.mjs      34 checks against ellipsoidal truth and against the
-                     specific defects this repo exists to prevent
+src/geodesy.mjs        canonical implementation, browser and Node
+src/geodesy.py         the Python twin, for build-time payload scripts
+docs/EARTH-MODEL.md    the audit, the error budget, and the decision
+test/verify.mjs        34 checks against ellipsoidal truth and against the
+                       specific defects this repo exists to prevent
+test/verify_parity.py  326 checks that the two implementations return the
+                       same number for the same input
+test/parity_driver.mjs the JavaScript side of that comparison
 ```
 
-Run the tests with `node test/verify.mjs`. No dependencies.
+Run both suites. No dependencies, and no network.
+
+```
+node   test/verify.mjs          34/34
+python test/verify_parity.py    326/326
+```
+
+Every payload builder in the estate is Python and every panel is JavaScript.
+The twin exists so those two agree by construction; the parity suite exists so
+that claim is checked rather than asserted. Change one file, change the other,
+and let `verify_parity.py` prove it — it compares distances, bearings,
+destinations, segment projections, circles, areas and nearest-feature search
+across a spread of real UK sites plus the awkward cases (identical points, the
+antimeridian, over the pole, a zero-length segment), and it compares the caveat
+strings exactly, because a consumer that shows different wording in one runtime
+than the other is a real defect, not a rounding one.
 
 ### Not here yet
 
-- `src/geodesy.py`, a Python twin, so the build-time scripts and the browser
-  agree by construction rather than by inspection. Every payload builder in the
-  estate is Python; today they each carry their own copy of the formula.
 - The 33 kV and 11 kV layers wired into consumers. See the inventory in
   `docs/EARTH-MODEL.md`: 33 kV is 104,557 segments and the voltage most
   utility-scale solar actually connects at, and it is currently unused.
@@ -74,6 +90,11 @@ Run the tests with `node test/verify.mjs`. No dependencies.
    wayleave, or a connection length. Every consumer must carry that caveat.
 5. **Absence from a layer is not absence on the ground.** Coverage gaps are
    reported as null, never as a large number.
+6. **Distance says nothing about headroom.** Fault level and thermal headroom
+   are properties of the network, not of the geometry. They depend on DNO data
+   — source impedance, fault infeed, existing committed connections — and are
+   established by a connection study. `STRAIGHT_LINE_CAVEAT.headroom` carries
+   that sentence so no consumer has to invent it.
 
 ## Scope
 

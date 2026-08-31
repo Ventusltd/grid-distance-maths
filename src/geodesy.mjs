@@ -318,6 +318,11 @@ export class SpatialIndex {
 /**
  * The caveat every consumer must show. Exported so no tool has to reword it,
  * and so a tool cannot quietly ship without it.
+ *
+ * `headroom` is the one a distance cannot answer at all. Fault level and
+ * thermal headroom are a property of the network, not of the geometry, and the
+ * only honest thing a proximity number can say about them is that they require
+ * DNO data and a study.
  */
 export const STRAIGHT_LINE_CAVEAT = Object.freeze({
   distance: "Straight-line distance to mapped geometry. Not a cable route, not a "
@@ -325,4 +330,8 @@ export const STRAIGHT_LINE_CAVEAT = Object.freeze({
   substation: "A mapped substation point does not confirm capacity, voltage "
     + "suitability, connection rights, queue position or acceptance by any network party.",
   coverage: "Absence from a mapped layer is not absence on the ground.",
+  headroom: "Fault level and thermal headroom cannot be inferred from distance. "
+    + "They depend on DNO network data such as source impedance, fault infeed and "
+    + "existing committed connections, and are established by a connection study, "
+    + "not by geometry.",
 });
