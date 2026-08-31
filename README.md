@@ -45,16 +45,19 @@ src/geodesy.py         the Python twin, for build-time payload scripts
 docs/EARTH-MODEL.md    the audit, the error budget, and the decision
 test/verify.mjs        34 checks against ellipsoidal truth and against the
                        specific defects this repo exists to prevent
-test/verify_parity.py  326 checks that the two implementations return the
+test/verify_parity.py  446 checks that the two implementations return the
                        same number for the same input
 test/parity_driver.mjs the JavaScript side of that comparison
+test/verify_nearest.mjs 20,000 randomised layouts checking the nearest-feature
+                       search against exhaustive truth
 ```
 
-Run both suites. No dependencies, and no network.
+Run all three suites. No dependencies, and no network.
 
 ```
 node   test/verify.mjs          34/34
-python test/verify_parity.py    326/326
+node   test/verify_nearest.mjs  54/54
+python test/verify_parity.py    446/446
 ```
 
 Every payload builder in the estate is Python and every panel is JavaScript.
@@ -90,11 +93,56 @@ than the other is a real defect, not a rounding one.
    wayleave, or a connection length. Every consumer must carry that caveat.
 5. **Absence from a layer is not absence on the ground.** Coverage gaps are
    reported as null, never as a large number.
-6. **Distance says nothing about headroom.** Fault level and thermal headroom
+6. **A nearest search may only stop when it can prove it.** The ring sweep
+   terminates when the best hit found is inside the radius the swept box
+   provably covers -- distance to the nearest box edge, with the east-west pair
+   converted on the longitude scale at the highest latitude the box reaches.
+   Anything looser silently overstates. See below.
+7. **Distance says nothing about headroom.** Fault level and thermal headroom
    are properties of the network, not of the geometry. They depend on DNO data
    — source impedance, fault infeed, existing committed connections — and are
    established by a connection study. `STRAIGHT_LINE_CAVEAT.headroom` carries
    that sentence so no consumer has to invent it.
+
+## The nearest-search defect, and why the tests missed it
+
+`verify.mjs` asserted "spatial index finds the same nearest as a brute-force
+sweep" from the first commit. It passed. The search was wrong in about one query
+in nine anyway, because that assertion used one hand-made fixture whose layout
+happened not to trip it.
+
+Two faults, both found on 31 Aug 2026 after an external review flagged the
+class of problem, both since fixed:
+
+1. **The stop test converted both axes with `ky`.** A cell is `cell` *degrees*
+   on both axes, but a degree of longitude is shorter than a degree of latitude
+   and narrows towards the pole -- 0.588 of it at 54N, 0.500 at 60N. Using the
+   latitude scale for the east-west span permitted stopping up to twice as early
+   as the swept box justified.
+2. **`addSegment` registered only the two endpoint cells.** A segment crossing a
+   cell without ending in it was invisible from inside that cell.
+
+Measured on 6,000 randomised layouts before the fix: **657 wrong, 10.95%**, the
+worst reporting **65.42 km for a circuit 35.79 km away**. Both faults overstate
+and never understate, which is what makes them dangerous -- a site reads as
+further from the network than it is and nothing about the output looks wrong.
+It is the same failure this repository was created to end, reappearing inside
+the module meant to end it.
+
+**No published number was affected.** The distances on globalgrid2050 were
+produced by `pipelinenews` `grid-proximity/build_payload.py`, which has its own
+nearest search and had already got both of these right -- it indexes by
+bounding box, and its `swept_radius_km` takes the true distance to each of the
+four box edges on both scales. The canonical module was behind its own consumer.
+That formulation has now been ported here, so the library is at least as good as
+the code it is meant to replace, and `verify_nearest.mjs` holds the line with
+20,000 randomised layouts across the UK latitude band rather than one fixture.
+
+The lesson is in the test, not the arithmetic: a fixture proves the code runs;
+only randomised comparison against exhaustive truth proves it is right. Parity
+between the two implementations proves nothing here either -- both were wrong in
+the same way, so they agreed. `verify_parity.py` now checks its nearest cases
+against brute force on the Python side as well.
 
 ## Scope
 

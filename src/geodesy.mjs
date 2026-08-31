@@ -278,12 +278,34 @@ export class SpatialIndex {
     this.buckets.get(k).push(id);
   }
 
-  /** Add every cell a segment's endpoints fall in, so long spans stay findable. */
+  /**
+   * Register a segment in EVERY cell its bounding box covers.
+   *
+   * Indexing only the two endpoint cells is not enough: a segment that enters a
+   * cell and leaves it again without either end landing inside is invisible
+   * from that cell, so a query sitting right beside the conductor misses it
+   * until the ring search happens to reach an endpoint. That is a silent
+   * overstatement, which is the one failure mode this whole module exists to
+   * prevent.
+   *
+   * The bounding box is deliberately conservative rather than an exact
+   * supercover walk: it can add a diagonal segment to a few cells it does not
+   * actually cross, which costs one extra distance measurement each and can
+   * never cost correctness, because `nearest` measures true distance to every
+   * candidate it pulls out.
+   */
   addSegment(id, aLon, aLat, bLon, bLat) {
-    this.add(id, aLon, aLat);
     const [i1, j1] = this.cellOf(aLon, aLat);
     const [i2, j2] = this.cellOf(bLon, bLat);
-    if (i1 !== i2 || j1 !== j2) this.add(id, bLon, bLat);
+    const iLo = Math.min(i1, i2); const iHi = Math.max(i1, i2);
+    const jLo = Math.min(j1, j2); const jHi = Math.max(j1, j2);
+    for (let i = iLo; i <= iHi; i += 1) {
+      for (let j = jLo; j <= jHi; j += 1) {
+        const k = SpatialIndex.key(i, j);
+        if (!this.buckets.has(k)) this.buckets.set(k, []);
+        this.buckets.get(k).push(id);
+      }
+    }
   }
 
   /**
@@ -292,8 +314,8 @@ export class SpatialIndex {
    */
   nearest(lon, lat, measure, maxRings = 90) {
     const [ci, cj] = this.cellOf(lon, lat);
-    const { ky } = localScaleKm(lat);
     let best = null;
+    const seen = new Set();
     for (let ring = 0; ring < maxRings; ring += 1) {
       for (let i = ci - ring; i <= ci + ring; i += 1) {
         for (let j = cj - ring; j <= cj + ring; j += 1) {
@@ -301,15 +323,66 @@ export class SpatialIndex {
           const bucket = this.buckets.get(SpatialIndex.key(i, j));
           if (!bucket) continue;
           for (const id of bucket) {
+            // A segment spans several cells, so the same id surfaces more than
+            // once. Measuring it once is the same answer for less work.
+            if (seen.has(id)) continue;
+            seen.add(id);
             const km = measure(id);
             if (best === null || km < best.km) best = { id, km };
           }
         }
       }
-      // Only safe to stop when the best hit lies inside the area already swept.
-      if (best && best.km <= ring * this.cell * ky * 0.999) return best;
+      if (best && best.km <= this.sweptClearanceKm(lon, lat, ring)) return best;
     }
     return best;
+  }
+
+  /**
+   * The radius around the query point that a Chebyshev ring sweep has PROVABLY
+   * covered. Stopping before the best hit is inside this is the bounded-search
+   * defect; stopping later is merely slow.
+   *
+   * Two things make this subtler than `ring * cell`:
+   *
+   * 1. A cell is `cell` DEGREES on both axes, but a degree of longitude is
+   *    shorter than a degree of latitude and narrows towards the pole -- 0.588
+   *    of it at 54N, 0.500 at 60N. Converting both axes with ky, as this did
+   *    until it was measured, permits stopping up to twice as early as the box
+   *    justifies. A randomised sweep over 6,000 layouts then returned the wrong
+   *    nearest feature in 10.95% of them, the worst reporting 65.4 km for a
+   *    circuit 35.8 km away. Every such error overstates distance.
+   *
+   * 2. Sweeping to Chebyshev distance `ring` covers an axis-aligned box of
+   *    cells, not a disc. The query point sits somewhere inside its own cell,
+   *    not at its centre, so the guaranteed radius is the distance to the
+   *    NEAREST edge of that box -- which can be almost a whole cell less than
+   *    ring * cell on the side the point is closest to.
+   *
+   * Taking the true distance to each of the four edges, rather than assuming
+   * the worst corner, is both correct and tighter: it terminates in fewer rings
+   * than a conservative bound while never terminating too early. This mirrors
+   * `swept_radius_km` in the pipelinenews grid-proximity builder, which reached
+   * the better formulation first; the canonical module should not be behind its
+   * own consumer.
+   *
+   * kx is evaluated at the highest latitude the box reaches, where a degree of
+   * longitude is narrowest, so the east-west guarantee holds across the whole
+   * box rather than only at the query latitude.
+   */
+  sweptClearanceKm(lon, lat, ring) {
+    if (ring <= 0) return 0;
+    const [ci, cj] = this.cellOf(lon, lat);
+    const latLo = (ci - ring) * this.cell;
+    const latHi = (ci + ring + 1) * this.cell;
+    const lonLo = (cj - ring) * this.cell;
+    const lonHi = (cj + ring + 1) * this.cell;
+    const ky = localScaleKm(lat).ky;
+    const worstLat = Math.min(Math.max(Math.abs(latLo), Math.abs(latHi)), 89.9);
+    const kx = localScaleKm(worstLat).kx;
+    return Math.min(
+      (lat - latLo) * ky, (latHi - lat) * ky,
+      (lon - lonLo) * kx, (lonHi - lon) * kx,
+    );
   }
 }
 

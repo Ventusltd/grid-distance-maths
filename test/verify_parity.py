@@ -186,6 +186,61 @@ for name, lon, lat in SITES:
     add("nearest", {"lon": lon, "lat": lat, "features": FEATURES, "cell": 0.1},
         None if hit is None else {"id": hit["id"], "km": hit["km"]})
 
+# Randomised nearest-search layouts, including the shapes that exposed the
+# bounded-search defect: high latitudes where a degree of longitude is narrow,
+# and long segments that cross whole cells without ending in them.
+#
+# Parity alone would not have caught that defect -- both implementations were
+# wrong in the same way, so they agreed. test/verify_nearest.mjs is what proves
+# the JavaScript correct against exhaustive truth; these cases are what carry
+# that guarantee across to the Python twin.
+_rng = 20260831
+
+
+def _rand():
+    global _rng
+    _rng = (_rng * 1103515245 + 12345) & 0x7FFFFFFF
+    return _rng / 0x7FFFFFFF
+
+
+for cell, spread, seg, lat_lo, lat_hi in [
+    (0.1, 2.0, 0.02, 50, 61),
+    (0.1, 2.0, 0.02, 58, 61),
+    (0.5, 4.0, 0.05, 50, 61),
+    (0.1, 2.0, 0.90, 50, 61),
+]:
+    for _ in range(30):
+        q_lat = lat_lo + _rand() * (lat_hi - lat_lo)
+        q_lon = -7 + _rand() * 9
+        feats = []
+        for _f in range(2 + int(_rand() * 5)):
+            f_lon = q_lon + (_rand() - 0.5) * spread
+            f_lat = q_lat + (_rand() - 0.5) * spread
+            feats.append([f_lon, f_lat,
+                          f_lon + (_rand() - 0.5) * seg,
+                          f_lat + (_rand() - 0.5) * seg])
+        idx = G.SpatialIndex(cell)
+        for fid, f in enumerate(feats):
+            idx.add_segment(fid, f[0], f[1], f[2], f[3])
+
+        def _measure(fid, lon=q_lon, lat=q_lat, feats=feats):
+            f = feats[fid]
+            return G.distance_to_segment_km(lon, lat, f[0], f[1], f[2], f[3])["km"]
+
+        h = idx.nearest(q_lon, q_lat, _measure)
+        add("nearest", {"lon": q_lon, "lat": q_lat, "features": feats, "cell": cell},
+            None if h is None else {"id": h["id"], "km": h["km"]})
+
+        # And the Python side must agree with exhaustive truth, not merely with
+        # the JavaScript.
+        truth = min(
+            ({"id": i, "km": _measure(i)} for i in range(len(feats))),
+            key=lambda r: r["km"])
+        if h is None or abs(h["km"] - truth["km"]) > 1e-9:
+            raise SystemExit(
+                "python nearest disagrees with brute force at %.5f,%.5f: "
+                "index %r, truth %r" % (q_lon, q_lat, h, truth))
+
 
 # ---- run the JavaScript side and compare ---------------------------------
 
